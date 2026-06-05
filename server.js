@@ -16,7 +16,7 @@ const IS_VERCEL = Boolean(process.env.VERCEL);
 const DEFAULT_OWNER_EMAIL = 'admin@easycred';
 const DEFAULT_OWNER_PASSWORD_HASH = '$2a$10$vZa0KGBj3BVj7LCNAlFYv.vChbQabmXTdS6lf/sGDd9cFNjbMKA/6';
 const LEGACY_DEFAULT_OWNER_EMAIL = 'admin@easycred.test';
-const STATIC_ROOT = IS_VERCEL ? path.join(__dirname, 'public') : __dirname;
+const STATIC_ROOT = path.join(__dirname, 'public');
 const DB_PATH = process.env.EASYCRED_DB_PATH
   || (IS_VERCEL ? path.join(os.tmpdir(), 'easycred-data.db') : path.join(__dirname, 'data.db'));
 const SQLJS_WASM = require.resolve('sql.js/dist/sql-wasm.wasm');

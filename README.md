@@ -9,7 +9,7 @@ npm install
 npm start
 ```
 
-O servidor roda em `http://localhost:3000` por padrão e serve `index.html` e a pasta `js/` contida no workspace.
+O servidor roda em `http://localhost:3000` por padrão e serve os arquivos estáticos da pasta `public/`.
 
 Endpoints principais (mock):
 - `POST /api/register` {name,email,password}

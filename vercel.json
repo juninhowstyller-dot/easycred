@@ -1,13 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null,
+  "framework": "express",
   "buildCommand": null,
-  "outputDirectory": null,
-  "functions": {
-    "server.js": {
-      "includeFiles": [
-        "node_modules/sql.js/dist/**"
-      ]
-    }
-  }
+  "outputDirectory": null
 }

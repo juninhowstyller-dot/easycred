@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
 const initSqlJs = require('sql.js');
@@ -11,8 +12,10 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DB_PATH = path.join(__dirname, 'data.db');
-const SQLJS_DIST = path.join(__dirname, 'node_modules', 'sql.js', 'dist');
+const IS_VERCEL = Boolean(process.env.VERCEL);
+const STATIC_ROOT = IS_VERCEL ? path.join(__dirname, 'public') : __dirname;
+const DB_PATH = IS_VERCEL ? path.join(os.tmpdir(), 'easycred-data.db') : path.join(__dirname, 'data.db');
+const SQLJS_WASM = require.resolve('sql.js/dist/sql-wasm.wasm');
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -23,10 +26,16 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.use(express.static(path.join(__dirname)));
+app.use(express.static(STATIC_ROOT));
 
 let db;
 let SQL;
+let initializationPromise;
+
+app.use((req, res, next) => {
+  if (!initializationPromise) return next();
+  initializationPromise.then(() => next()).catch(next);
+});
 
 function normalizeJson(value) {
   if (value == null || value === '') return null;
@@ -122,7 +131,7 @@ function calculateSimulation(amount, numInstallments, type, creditCardFeeConfig,
 
 function createAccessToken(user) {
   const secret = process.env.JWT_SECRET || 'devsecret';
-  return jwt.sign({ userId: user.id, role: user.role }, secret, {
+  return jwt.sign({ userId: user.id, role: user.role, email: user.email }, secret, {
     expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
   });
 }
@@ -432,7 +441,7 @@ function buildCompanySeed(companyId, ownerId) {
 }
 
 async function startServer() {
-  SQL = await initSqlJs({ locateFile: file => path.join(SQLJS_DIST, file) });
+  SQL = await initSqlJs({ locateFile: () => SQLJS_WASM });
   if (fs.existsSync(DB_PATH)) {
     const filebuffer = fs.readFileSync(DB_PATH);
     db = new SQL.Database(filebuffer);
@@ -538,8 +547,11 @@ async function startServer() {
     expires_at DATETIME
   );`);
 
-  const existingOwner = queryOne('SELECT * FROM users WHERE role = ?', ['owner']);
-  if (!existingOwner) {
+  const defaultOwner = queryOne(
+    'SELECT * FROM users WHERE email = ? AND role = ?',
+    ['admin@easycred.test', 'owner']
+  );
+  if (!defaultOwner) {
     const ownerPassword = bcrypt.hashSync('Password123!', 10);
     run('INSERT INTO users (name,email,password,role) VALUES (?,?,?,?)', [
       'Administrator',
@@ -682,20 +694,21 @@ async function startServer() {
     if (!name || !email || !password) {
       return res.status(400).json({ message: 'name, email and password are required' });
     }
-    const existing = queryOne('SELECT id FROM users WHERE email = ?', [email]);
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const existing = queryOne('SELECT id FROM users WHERE email = ?', [normalizedEmail]);
     if (existing) {
       return res.status(400).json({ message: 'Email is already registered' });
     }
 
     const hash = bcrypt.hashSync(password, 10);
-    run('INSERT INTO users (name,email,password,role) VALUES (?,?,?,?)', [name, email, hash, 'owner']);
+    run('INSERT INTO users (name,email,password,role) VALUES (?,?,?,?)', [name, normalizedEmail, hash, 'owner']);
     const userId = queryOne('SELECT last_insert_rowid() AS id').id;
     run('INSERT INTO companies (name,identifier) VALUES (?,?)', [`${name} Company`, `${name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`]);
     const companyId = queryOne('SELECT last_insert_rowid() AS id').id;
     run('INSERT INTO company_users (company_id,user_id,role) VALUES (?,?,?)', [companyId, userId, 'owner']);
     persistDb();
 
-    const accessToken = createAccessToken({ id: userId, role: 'owner' });
+    const accessToken = createAccessToken({ id: userId, role: 'owner', email: normalizedEmail });
     const refreshToken = createRefreshToken();
     const expiresAt = new Date(Date.now() + (Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS || 7) * 24 * 60 * 60 * 1000)).toISOString();
     run('INSERT INTO refresh_tokens (user_id,token,expires_at) VALUES (?,?,?)', [userId, refreshToken, expiresAt]);
@@ -709,12 +722,13 @@ async function startServer() {
     if (!email || !password) {
       return res.status(400).json({ message: 'email and password required' });
     }
-    const user = queryOne('SELECT id,name,email,password,role FROM users WHERE email = ?', [email]);
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const user = queryOne('SELECT id,name,email,password,role FROM users WHERE email = ?', [normalizedEmail]);
     if (!user || !bcrypt.compareSync(password, user.password)) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    const accessToken = createAccessToken({ id: user.id, role: user.role });
+    const accessToken = createAccessToken(user);
     const refreshToken = createRefreshToken();
     const expiresAt = new Date(Date.now() + (Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS || 7) * 24 * 60 * 60 * 1000)).toISOString();
     run('INSERT INTO refresh_tokens (user_id,token,expires_at) VALUES (?,?,?)', [user.id, refreshToken, expiresAt]);
@@ -737,7 +751,7 @@ async function startServer() {
       persistDb();
       return res.status(401).json({ message: 'Refresh token expired' });
     }
-    const user = queryOne('SELECT id,role FROM users WHERE id = ?', [tokenRow.user_id]);
+    const user = queryOne('SELECT id,email,role FROM users WHERE id = ?', [tokenRow.user_id]);
     if (!user) {
       return res.status(401).json({ message: 'Invalid refresh token' });
     }
@@ -748,7 +762,7 @@ async function startServer() {
     run('INSERT INTO refresh_tokens (user_id,token,expires_at) VALUES (?,?,?)', [user.id, newRefreshToken, expiresAt]);
     persistDb();
 
-    return res.json({ accessToken: createAccessToken({ id: user.id, role: user.role }), refreshToken: newRefreshToken });
+    return res.json({ accessToken: createAccessToken(user), refreshToken: newRefreshToken });
   });
 
   app.get('/company/get-by-user', authenticate, (req, res) => {
@@ -1144,17 +1158,25 @@ async function startServer() {
   });
 
   app.get('*', (req, res) => {
-    const indexPath = path.join(__dirname, 'index.html');
+    const indexPath = path.join(STATIC_ROOT, 'index.html');
     if (fs.existsSync(indexPath)) return res.sendFile(indexPath);
     return res.status(404).send('Not found');
   });
-
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
 }
 
-startServer().catch(error => {
-  console.error('Failed to start server:', error);
-  process.exit(1);
-});
+initializationPromise = startServer();
+
+if (require.main === module) {
+  initializationPromise
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`Server running on http://localhost:${PORT}`);
+      });
+    })
+    .catch(error => {
+      console.error('Failed to start server:', error);
+      process.exit(1);
+    });
+}
+
+module.exports = app;

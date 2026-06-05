@@ -13,6 +13,9 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const IS_VERCEL = Boolean(process.env.VERCEL);
+const DEFAULT_OWNER_EMAIL = 'admin@easycred';
+const DEFAULT_OWNER_PASSWORD_HASH = '$2a$10$vZa0KGBj3BVj7LCNAlFYv.vChbQabmXTdS6lf/sGDd9cFNjbMKA/6';
+const LEGACY_DEFAULT_OWNER_EMAIL = 'admin@easycred.test';
 const STATIC_ROOT = IS_VERCEL ? path.join(__dirname, 'public') : __dirname;
 const DB_PATH = process.env.EASYCRED_DB_PATH
   || (IS_VERCEL ? path.join(os.tmpdir(), 'easycred-data.db') : path.join(__dirname, 'data.db'));
@@ -533,16 +536,63 @@ async function startServer() {
     expires_at DATETIME
   );`);
 
-  const defaultOwner = queryOne(
+  let defaultOwner = queryOne(
     'SELECT * FROM users WHERE email = ? AND role = ?',
-    ['admin@easycred.test', 'owner']
+    [DEFAULT_OWNER_EMAIL, 'owner']
   );
   if (!defaultOwner) {
-    const ownerPassword = bcrypt.hashSync('Password123!', 10);
+    const legacyDefaultOwner = queryOne(
+      'SELECT * FROM users WHERE email = ? AND role = ?',
+      [LEGACY_DEFAULT_OWNER_EMAIL, 'owner']
+    );
+    if (legacyDefaultOwner) {
+      run('UPDATE users SET email = ?, password = ? WHERE id = ?', [
+        DEFAULT_OWNER_EMAIL,
+        DEFAULT_OWNER_PASSWORD_HASH,
+        legacyDefaultOwner.id,
+      ]);
+      defaultOwner = queryOne('SELECT * FROM users WHERE id = ?', [legacyDefaultOwner.id]);
+    }
+  } else {
+    run('UPDATE users SET password = ? WHERE id = ?', [DEFAULT_OWNER_PASSWORD_HASH, defaultOwner.id]);
+  }
+
+  const duplicateLegacyDefaultOwner = queryOne(
+    'SELECT id FROM users WHERE email = ? AND role = ?',
+    [LEGACY_DEFAULT_OWNER_EMAIL, 'owner']
+  );
+  if (defaultOwner && duplicateLegacyDefaultOwner) {
+    const legacyMemberships = queryAll(
+      'SELECT company_id,role FROM company_users WHERE user_id = ?',
+      [duplicateLegacyDefaultOwner.id]
+    );
+    legacyMemberships.forEach(membership => {
+      const existingMembership = queryOne(
+        'SELECT id FROM company_users WHERE company_id = ? AND user_id = ?',
+        [membership.company_id, defaultOwner.id]
+      );
+      if (!existingMembership) {
+        run('INSERT INTO company_users (company_id,user_id,role) VALUES (?,?,?)', [
+          membership.company_id,
+          defaultOwner.id,
+          membership.role,
+        ]);
+      }
+    });
+    run('UPDATE sales SET seller_id = ? WHERE seller_id = ?', [
+      defaultOwner.id,
+      duplicateLegacyDefaultOwner.id,
+    ]);
+    run('DELETE FROM refresh_tokens WHERE user_id = ?', [duplicateLegacyDefaultOwner.id]);
+    run('DELETE FROM company_users WHERE user_id = ?', [duplicateLegacyDefaultOwner.id]);
+    run('DELETE FROM users WHERE id = ?', [duplicateLegacyDefaultOwner.id]);
+  }
+
+  if (!defaultOwner) {
     run('INSERT INTO users (name,email,password,role) VALUES (?,?,?,?)', [
       'Administrator',
-      'admin@easycred.test',
-      ownerPassword,
+      DEFAULT_OWNER_EMAIL,
+      DEFAULT_OWNER_PASSWORD_HASH,
       'owner',
     ]);
 
@@ -642,7 +692,7 @@ async function startServer() {
 
   const defaultOwnerUser = queryOne(
     'SELECT id FROM users WHERE email = ? AND role = ?',
-    ['admin@easycred.test', 'owner']
+    [DEFAULT_OWNER_EMAIL, 'owner']
   );
   const primaryCompany = queryOne('SELECT id FROM companies ORDER BY id LIMIT 1');
   if (defaultOwnerUser && primaryCompany) {

@@ -4,19 +4,27 @@ import { useNavigate } from "react-router-dom";
 function Login() {
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState("admin@easycred.test");
+  const [email, setEmail] = useState("admin@easycred");
   const [senha, setSenha] = useState("");
 
-  function entrar(e) {
+  async function entrar(e) {
     e.preventDefault();
 
-    if (email === "admin@easycred.test" && senha === "Password123!") {
-      localStorage.setItem("logado", "true");
-      navigate("/dashboard");
-      return;
-    }
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: senha }),
+      });
+      if (!response.ok) throw new Error("Invalid credentials");
 
-    alert("Email ou senha incorretos");
+      const tokens = await response.json();
+      localStorage.setItem("accessToken", tokens.accessToken);
+      localStorage.setItem("refreshToken", tokens.refreshToken);
+      navigate("/dashboard");
+    } catch {
+      alert("Email ou senha incorretos");
+    }
   }
 
   return (
@@ -46,11 +54,6 @@ function Login() {
           Entrar
         </button>
 
-        <p style={{ fontSize: 12, marginTop: 15 }}>
-          Email: admin@easycred.test
-          <br />
-          Senha: Password123!
-        </p>
       </form>
     </div>
   );

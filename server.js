@@ -14,7 +14,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const STATIC_ROOT = IS_VERCEL ? path.join(__dirname, 'public') : __dirname;
-const DB_PATH = IS_VERCEL ? path.join(os.tmpdir(), 'easycred-data.db') : path.join(__dirname, 'data.db');
+const DB_PATH = process.env.EASYCRED_DB_PATH
+  || (IS_VERCEL ? path.join(os.tmpdir(), 'easycred-data.db') : path.join(__dirname, 'data.db'));
 const SQLJS_WASM = require.resolve('sql.js/dist/sql-wasm.wasm');
 
 app.use(express.json());
@@ -400,42 +401,27 @@ function getWeekNumber(date) {
 }
 
 function buildCompanySeed(companyId, ownerId) {
-  const creditCards = [
-    {
-      name: 'Visa',
-      icon: 'https://cdn-icons-png.flaticon.com/512/196/196578.png',
-      fees: [{ installment: 1, value: 2.5, unit: 'percentage' }, { installment: 6, value: 3.8, unit: 'percentage' }, { installment: 12, value: 4.5, unit: 'percentage' }, { installment: 18, value: 5.2, unit: 'percentage' }],
-    },
-    {
-      name: 'Mastercard',
-      icon: 'https://cdn-icons-png.flaticon.com/512/196/196579.png',
-      fees: [{ installment: 1, value: 2.3, unit: 'percentage' }, { installment: 6, value: 3.5, unit: 'percentage' }, { installment: 12, value: 4.2, unit: 'percentage' }, { installment: 18, value: 5.0, unit: 'percentage' }],
-    },
-  ];
+  const creditCards = [{
+    name: 'Cartão',
+    icon: 'https://e7.pngegg.com/pngimages/517/985/png-clipart-logo-debit-mastercard-graphics-debit-card-mastercard-text-orange.png',
+    fees: [{ installment: 1, value: 0, unit: 'percentage' }],
+  }];
 
   const installments = [{
     name: '1-18x',
     data: Array.from({ length: 18 }, (_, index) => ({
       installment: index + 1,
-      value: 0,
+      value: index + 1 === 10 ? 16 : 0,
       unit: 'percentage',
     })),
   }];
 
-  const machines = [
-    {
-      name: 'Modern POS',
-      icon: '/images/moderninha-pro2.png',
-      installment_id: 1,
-      employees: [ownerId],
-    },
-    {
-      name: 'Mobile Payment',
-      icon: 'https://cdn-icons-png.flaticon.com/512/2917/2917995.png',
-      installment_id: 2,
-      employees: [ownerId],
-    },
-  ];
+  const machines = [{
+    name: 'Moderninha Pro 2',
+    icon: '/images/moderninha-pro2.png',
+    installment_id: 1,
+    employees: [ownerId],
+  }];
 
   return { creditCards, installments, machines };
 }
@@ -654,6 +640,28 @@ async function startServer() {
     });
   }
 
+  const defaultOwnerUser = queryOne(
+    'SELECT id FROM users WHERE email = ? AND role = ?',
+    ['admin@easycred.test', 'owner']
+  );
+  const primaryCompany = queryOne('SELECT id FROM companies ORDER BY id LIMIT 1');
+  if (defaultOwnerUser && primaryCompany) {
+    const primaryMembership = queryOne(
+      'SELECT id FROM company_users WHERE user_id = ? AND company_id = ?',
+      [defaultOwnerUser.id, primaryCompany.id]
+    );
+    if (!primaryMembership) {
+      run(
+        'INSERT INTO company_users (company_id,user_id,role) VALUES (?,?,?)',
+        [primaryCompany.id, defaultOwnerUser.id, 'owner']
+      );
+    }
+    run(
+      'DELETE FROM company_users WHERE user_id = ? AND company_id <> ?',
+      [defaultOwnerUser.id, primaryCompany.id]
+    );
+  }
+
   ensureCombinedInstallments();
 
   persistDb();
@@ -675,17 +683,22 @@ async function startServer() {
 
   function requireCompany(req, res, next) {
     const companyId = req.headers['x-company-id'];
-    if (!companyId) {
-      return res.status(400).json({ message: 'Missing x-company-id header' });
-    }
     const numericCompanyId = Number(companyId);
-    if (!numericCompanyId) {
-      return res.status(400).json({ message: 'Invalid company id' });
+    if (numericCompanyId && ensureCompanyMembership(req.user.userId, numericCompanyId)) {
+      req.companyId = numericCompanyId;
+      return next();
     }
-    if (!ensureCompanyMembership(req.user.userId, numericCompanyId)) {
-      return res.status(403).json({ message: 'User does not belong to this company' });
+
+    const fallbackMembership = queryOne(
+      'SELECT company_id FROM company_users WHERE user_id = ? ORDER BY id LIMIT 1',
+      [req.user.userId]
+    );
+    if (!fallbackMembership) {
+      return res.status(403).json({ message: 'User does not belong to a company' });
     }
-    req.companyId = numericCompanyId;
+
+    req.companyId = Number(fallbackMembership.company_id);
+    res.header('x-company-id', String(req.companyId));
     return next();
   }
 

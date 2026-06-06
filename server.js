@@ -2,7 +2,6 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const crypto = require('crypto');
 const dotenv = require('dotenv');
 const initSqlJs = require('sql.js');
 const bcrypt = require('bcryptjs');
@@ -135,13 +134,25 @@ function calculateSimulation(amount, numInstallments, type, creditCardFeeConfig,
 
 function createAccessToken(user) {
   const secret = process.env.JWT_SECRET || 'devsecret';
-  return jwt.sign({ userId: user.id, role: user.role, email: user.email }, secret, {
-    expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
+  const expiresIn = process.env.JWT_ACCESS_EXPIRES_IN;
+  const options = expiresIn ? { expiresIn } : {};
+  return jwt.sign({ userId: user.id, role: user.role, email: user.email }, secret, options);
+}
+
+function createRefreshToken(user) {
+  const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'devsecret';
+  return jwt.sign({ userId: user.id, type: 'refresh' }, secret, {
+    expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '10y',
   });
 }
 
-function createRefreshToken() {
-  return crypto.randomBytes(48).toString('hex');
+function verifySignedRefreshToken(token) {
+  const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'devsecret';
+  const payload = jwt.verify(token, secret);
+  if (payload.type !== 'refresh' || !payload.userId) {
+    throw new Error('Invalid refresh token');
+  }
+  return payload;
 }
 
 function ensureCompanyMembership(userId, companyId) {
@@ -772,10 +783,7 @@ async function startServer() {
     persistDb();
 
     const accessToken = createAccessToken({ id: userId, role: 'owner', email: normalizedEmail });
-    const refreshToken = createRefreshToken();
-    const expiresAt = new Date(Date.now() + (Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS || 7) * 24 * 60 * 60 * 1000)).toISOString();
-    run('INSERT INTO refresh_tokens (user_id,token,expires_at) VALUES (?,?,?)', [userId, refreshToken, expiresAt]);
-    persistDb();
+    const refreshToken = createRefreshToken({ id: userId });
 
     return res.json({ accessToken, refreshToken });
   });
@@ -792,10 +800,7 @@ async function startServer() {
     }
 
     const accessToken = createAccessToken(user);
-    const refreshToken = createRefreshToken();
-    const expiresAt = new Date(Date.now() + (Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS || 7) * 24 * 60 * 60 * 1000)).toISOString();
-    run('INSERT INTO refresh_tokens (user_id,token,expires_at) VALUES (?,?,?)', [user.id, refreshToken, expiresAt]);
-    persistDb();
+    const refreshToken = createRefreshToken(user);
 
     return res.json({ accessToken, refreshToken });
   });
@@ -805,27 +810,37 @@ async function startServer() {
     if (!refreshToken) {
       return res.status(400).json({ message: 'refreshToken required' });
     }
-    const tokenRow = queryOne('SELECT id,user_id,expires_at FROM refresh_tokens WHERE token = ?', [refreshToken]);
-    if (!tokenRow) {
-      return res.status(401).json({ message: 'Invalid refresh token' });
+    let userId;
+    let legacyTokenRow = null;
+    try {
+      userId = verifySignedRefreshToken(refreshToken).userId;
+    } catch {
+      legacyTokenRow = queryOne(
+        'SELECT id,user_id,expires_at FROM refresh_tokens WHERE token = ?',
+        [refreshToken]
+      );
+      if (!legacyTokenRow) {
+        return res.status(401).json({ message: 'Invalid refresh token' });
+      }
+      if (new Date(legacyTokenRow.expires_at) < new Date()) {
+        run('DELETE FROM refresh_tokens WHERE id = ?', [legacyTokenRow.id]);
+        persistDb();
+        return res.status(401).json({ message: 'Refresh token expired' });
+      }
+      userId = legacyTokenRow.user_id;
     }
-    if (new Date(tokenRow.expires_at) < new Date()) {
-      run('DELETE FROM refresh_tokens WHERE id = ?', [tokenRow.id]);
-      persistDb();
-      return res.status(401).json({ message: 'Refresh token expired' });
-    }
-    const user = queryOne('SELECT id,email,role FROM users WHERE id = ?', [tokenRow.user_id]);
+
+    const user = queryOne('SELECT id,email,role FROM users WHERE id = ?', [userId]);
     if (!user) {
       return res.status(401).json({ message: 'Invalid refresh token' });
     }
 
-    run('DELETE FROM refresh_tokens WHERE id = ?', [tokenRow.id]);
-    const newRefreshToken = createRefreshToken();
-    const expiresAt = new Date(Date.now() + (Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS || 7) * 24 * 60 * 60 * 1000)).toISOString();
-    run('INSERT INTO refresh_tokens (user_id,token,expires_at) VALUES (?,?,?)', [user.id, newRefreshToken, expiresAt]);
-    persistDb();
+    if (legacyTokenRow) {
+      run('DELETE FROM refresh_tokens WHERE id = ?', [legacyTokenRow.id]);
+      persistDb();
+    }
 
-    return res.json({ accessToken: createAccessToken(user), refreshToken: newRefreshToken });
+    return res.json({ accessToken: createAccessToken(user), refreshToken: createRefreshToken(user) });
   });
 
   app.get('/company/get-by-user', authenticate, (req, res) => {

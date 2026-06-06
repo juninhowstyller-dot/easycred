@@ -3,7 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:session": "node test/session-regression.test.cjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -255,6 +255,258 @@ function calculateSimulation(amount, numInstallments, type, creditCardFeeConfig,
   };
 }
 
+function formatCurrencyBR(value) {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(Number(value) || 0);
+}
+
+function parseCurrencyInput(value) {
+  const text = String(value || '').replace(/[^\d.,-]/g, '');
+  if (!text) return 0;
+  if (text.includes(',')) {
+    return Number(text.replace(/\./g, '').replace(',', '.')) || 0;
+  }
+  return Number(text) || 0;
+}
+
+function parseTelegramSimulationText(text) {
+  const rawText = String(text || '').trim();
+  const normalized = rawText
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const type = /\b(com\s+limite|limite)\b/.test(normalized)
+    && !/\b(sem\s+limite|semlimite)\b/.test(normalized)
+    ? 'limit'
+    : 'unleashed';
+  const numbers = rawText.replace(/^\/\w+(@\w+)?\s*/i, '').match(/\d[\d.,]*/g) || [];
+
+  return {
+    amount: parseCurrencyInput(numbers[0]),
+    numInstallments: Number.parseInt(numbers[1], 10),
+    type,
+  };
+}
+
+function telegramHelpText(chatId) {
+  return [
+    'Easy Cred - simulacao pelo Telegram',
+    '',
+    'Envie assim:',
+    '1000 10',
+    '1000 10 limite',
+    'R$ 1.500,00 12 sem limite',
+    '',
+    'O primeiro valor e o valor solicitado/liberado.',
+    'O segundo valor e a quantidade de parcelas.',
+    '',
+    `ID deste chat: ${chatId}`,
+  ].join('\n');
+}
+
+function isTelegramChatAllowed(chatId) {
+  const allowed = String(process.env.TELEGRAM_ALLOWED_CHAT_IDS || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+  return allowed.length === 0 || allowed.includes(String(chatId));
+}
+
+async function getTelegramCompanyId() {
+  const configuredCompanyId = Number(process.env.TELEGRAM_COMPANY_ID);
+  if (configuredCompanyId) {
+    const company = await queryOne('SELECT id FROM companies WHERE id = ?', [configuredCompanyId]);
+    if (company) return Number(company.id);
+  }
+
+  const company = await queryOne('SELECT id FROM companies ORDER BY id LIMIT 1');
+  return company ? Number(company.id) : null;
+}
+
+async function buildTelegramSimulation(amount, numInstallments, type) {
+  const companyId = await getTelegramCompanyId();
+  if (!companyId) {
+    throw new Error('Nenhuma empresa encontrada para simular.');
+  }
+
+  const [creditCard, machine, installment] = await Promise.all([
+    queryOne('SELECT id,name FROM credit_cards WHERE company_id = ? ORDER BY id LIMIT 1', [companyId]),
+    queryOne('SELECT id,name,installment_id FROM machines WHERE company_id = ? ORDER BY id LIMIT 1', [companyId]),
+    queryOne('SELECT id,name FROM installments WHERE company_id = ? ORDER BY id LIMIT 1', [companyId]),
+  ]);
+
+  if (!creditCard) throw new Error('Nenhum cartao configurado.');
+  if (!machine) throw new Error('Nenhuma maquininha configurada.');
+
+  const installmentId = machine.installment_id || installment?.id;
+  const resolvedFees = await resolveSimulationFees(
+    companyId,
+    creditCard.id,
+    installmentId,
+    numInstallments
+  );
+  const calculation = calculateSimulation(
+    amount,
+    numInstallments,
+    type,
+    resolvedFees.creditCardFee,
+    resolvedFees.installmentFee
+  );
+
+  return {
+    companyId,
+    creditCard,
+    machine,
+    installmentId: resolvedFees.installmentId,
+    appliedCreditCardFee: resolvedFees.creditCardFee,
+    appliedInstallmentFee: resolvedFees.installmentFee,
+    ...calculation,
+  };
+}
+
+function formatTelegramSimulationResult(result) {
+  const isLimit = result.type === 'limit';
+  const lines = [
+    isLimit ? 'Simulacao com limite' : 'Simulacao sem limite',
+    '',
+  ];
+
+  if (isLimit) {
+    lines.push(`Valor liberado: ${formatCurrencyBR(result.total)}`);
+    lines.push(`Total a pagar: ${formatCurrencyBR(result.amount)}`);
+  } else {
+    lines.push(`Valor solicitado: ${formatCurrencyBR(result.amount)}`);
+    lines.push(`Total a pagar: ${formatCurrencyBR(result.total)}`);
+  }
+
+  lines.push(`Parcelas: ${result.numInstallments}x`);
+  lines.push(`Valor da parcela: ${formatCurrencyBR(result.installmentValue)}`);
+
+  if (process.env.TELEGRAM_SHOW_PROFIT === 'true') {
+    lines.push('');
+    lines.push(`Lucro liquido: ${formatCurrencyBR(result.profit)}`);
+    lines.push(`Lucro bruto: ${formatCurrencyBR(result.grossProfit)}`);
+    lines.push(`Taxa da maquininha: ${formatCurrencyBR(result.creditCardAbsoluteFeeValue)}`);
+  }
+
+  lines.push('');
+  lines.push(`Maquininha: ${result.machine.name}`);
+  lines.push(`Cartao: ${result.creditCard.name}`);
+
+  return lines.join('\n');
+}
+
+function createTelegramClient(token) {
+  const baseUrl = `https://api.telegram.org/bot${token}`;
+  return {
+    async call(method, body) {
+      const response = await fetch(`${baseUrl}/${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.description || `Telegram API error: ${response.status}`);
+      }
+      return payload.result;
+    },
+  };
+}
+
+async function startTelegramBot() {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token || process.env.TELEGRAM_BOT_ENABLED === 'false') return;
+  if (IS_VERCEL) {
+    console.warn('Telegram polling disabled on Vercel. Use it on VPS/local server.');
+    return;
+  }
+
+  const telegram = createTelegramClient(token);
+  let offset = 0;
+  let polling = false;
+
+  async function sendMessage(chatId, text) {
+    await telegram.call('sendMessage', {
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true,
+    });
+  }
+
+  async function handleMessage(message) {
+    const chatId = message.chat.id;
+    const text = String(message.text || '').trim();
+    if (!text) return;
+
+    if (!isTelegramChatAllowed(chatId)) {
+      await sendMessage(chatId, `Chat nao autorizado. ID deste chat: ${chatId}`);
+      return;
+    }
+
+    if (/^\/(start|help|ajuda)\b/i.test(text)) {
+      await sendMessage(chatId, telegramHelpText(chatId));
+      return;
+    }
+
+    const simulation = parseTelegramSimulationText(text);
+    if (!simulation.amount || !simulation.numInstallments) {
+      await sendMessage(chatId, telegramHelpText(chatId));
+      return;
+    }
+    if (simulation.numInstallments < 1 || simulation.numInstallments > 18) {
+      await sendMessage(chatId, 'Informe uma parcela entre 1 e 18.');
+      return;
+    }
+
+    try {
+      const result = await buildTelegramSimulation(
+        simulation.amount,
+        simulation.numInstallments,
+        simulation.type
+      );
+      await sendMessage(chatId, formatTelegramSimulationResult(result));
+    } catch (error) {
+      console.error('Telegram simulation failed:', error);
+      await sendMessage(chatId, `Nao consegui simular agora: ${error.message}`);
+    }
+  }
+
+  async function poll() {
+    if (polling) return;
+    polling = true;
+    try {
+      const updates = await telegram.call('getUpdates', {
+        offset,
+        timeout: 0,
+        allowed_updates: ['message'],
+      });
+      for (const update of updates) {
+        offset = Math.max(offset, update.update_id + 1);
+        if (update.message) await handleMessage(update.message);
+      }
+    } catch (error) {
+      console.error('Telegram polling failed:', error.message);
+    } finally {
+      polling = false;
+    }
+  }
+
+  const oldUpdates = await telegram.call('getUpdates', {
+    timeout: 0,
+    allowed_updates: ['message'],
+  });
+  for (const update of oldUpdates) {
+    offset = Math.max(offset, update.update_id + 1);
+  }
+
+  const intervalMs = Number(process.env.TELEGRAM_POLLING_INTERVAL_MS) || 2500;
+  setInterval(poll, intervalMs);
+  console.log('Telegram bot polling enabled.');
+}
+
 function createAccessToken(user) {
   const secret = process.env.JWT_SECRET || 'devsecret';
   const expiresIn = process.env.JWT_ACCESS_EXPIRES_IN;
@@ -1602,6 +1854,8 @@ async function startServer() {
     }
     return res.status(404).send('Not found');
   });
+
+  await startTelegramBot();
 }
 
 initializationPromise = startServer();

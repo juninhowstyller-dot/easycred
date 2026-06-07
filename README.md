@@ -46,6 +46,32 @@ npm test
 
 A suite cobre sessao/login, persistencia de parcelamento e protecao contra deploy serverless sem banco Postgres.
 
+## Bot do Telegram
+
+O bot usa as mesmas taxas, maquininha, cartao e parcelamento configurados no sistema. Ele fica desligado ate voce colocar um token no `.env`.
+
+1. No Telegram, fale com `@BotFather`.
+2. Use `/newbot` e copie o token.
+3. Coloque no `.env`:
+
+```env
+TELEGRAM_BOT_TOKEN=token_do_bot
+TELEGRAM_BOT_ENABLED=true
+TELEGRAM_ALLOWED_CHAT_IDS=
+TELEGRAM_COMPANY_ID=
+TELEGRAM_SHOW_PROFIT=false
+```
+
+Depois reinicie o servidor. No bot, envie:
+
+```text
+1000 10
+1000 10 limite
+R$ 1.500,00 12 sem limite
+```
+
+Use `/start` no bot para ver o ID do chat. Se quiser limitar quem pode usar, coloque esse ID em `TELEGRAM_ALLOWED_CHAT_IDS`.
+
 ## Deploy em VPS Ubuntu
 
 Opcao recomendada com Docker Compose:

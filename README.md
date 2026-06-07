@@ -6,6 +6,14 @@ As taxas de cartao e o parcelamento ficam para configuracao manual dentro do sis
 
 ## Rodar localmente
 
+No Windows, voce pode abrir direto pelo arquivo:
+
+```text
+ABRIR_PROJETO.bat
+```
+
+Ele instala as dependencias se `node_modules` nao existir e inicia o servidor.
+
 ```bash
 npm install
 cp .env.example .env
@@ -27,6 +35,8 @@ DATABASE_URL=
 ```
 
 Se `DATABASE_URL` ficar vazio, o sistema usa SQLite no arquivo definido por `EASYCRED_DB_PATH`.
+
+O banco local salvo nesta pasta fica em `data.db`.
 
 ## Testes
 

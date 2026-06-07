@@ -1,0 +1,14 @@
+services:
+  easycred:
+    build: .
+    container_name: easycred
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - easycred-data:/app/data
+
+volumes:
+  easycred-data:

@@ -2,15 +2,22 @@
   "name": "easycred",
   "private": true,
   "version": "1.0.0",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
-    "test:session": "node test/session-regression.test.cjs"
+    "test": "npm run test:session && npm run test:installments && npm run test:vercel-storage",
+    "test:installments": "node test/installment-regression.test.cjs",
+    "test:session": "node test/session-regression.test.cjs",
+    "test:vercel-storage": "node test/vercel-storage-regression.test.cjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.0.0",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.0",
+    "pg": "^8.21.0",
     "sql.js": "^1.8.0"
   }
 }

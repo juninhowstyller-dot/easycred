@@ -1,13 +1,12 @@
 node_modules/
+.git/
+.vercel/
 .env
 .env.local
 .env.*.local
-.DS_Store
+data.db
+data/
+test/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# SQLite data file generated at runtime
-/data.db
-.vercel
-data/

@@ -43,6 +43,25 @@ async function run() {
       headers: { Authorization: `Bearer ${registration.body.accessToken}` },
     });
     assert.equal(company.response.status, 200);
+    assert.equal(company.body[0].icon, '/images/logo.svg');
+
+    const updatedIcon = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="green"/></svg>';
+    const companyProfile = await request(baseUrl, '/company/profile', {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${registration.body.accessToken}`,
+        'x-company-id': String(company.body[0].id),
+      },
+      body: JSON.stringify({ icon: updatedIcon }),
+    });
+    assert.equal(companyProfile.response.status, 200);
+    assert.equal(companyProfile.body.icon, updatedIcon);
+
+    const updatedCompany = await request(baseUrl, '/company/get-by-user', {
+      headers: { Authorization: `Bearer ${registration.body.accessToken}` },
+    });
+    assert.equal(updatedCompany.response.status, 200);
+    assert.equal(updatedCompany.body[0].icon, updatedIcon);
 
     const refreshes = await Promise.all(
       Array.from({ length: 5 }, () => request(baseUrl, '/auth/refresh', {

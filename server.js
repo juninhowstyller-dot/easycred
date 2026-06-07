@@ -235,7 +235,7 @@ function calculateSimulation(amount, numInstallments, type, creditCardFeeConfig,
     total = parsedAmount + installmentFee + creditCardFee;
   }
 
-  total = roundCurrency(total);
+  total = Math.round(roundCurrency(total));
   creditCardFee = roundCurrency(creditCardFee);
   const grossProfit = roundCurrency(
     simulationType === 'limit' ? parsedAmount - total : total - parsedAmount

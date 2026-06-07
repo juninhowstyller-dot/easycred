@@ -99,8 +99,8 @@ async function run() {
     });
     assert.equal(simulation.response.status, 200);
     assert.equal(simulation.body.appliedInstallmentFee.fee, 18.75);
-    assert.equal(simulation.body.total, 1187.5);
-    assert.equal(simulation.body.installmentValue, 118.75);
+    assert.equal(simulation.body.total, 1188);
+    assert.equal(simulation.body.installmentValue, 118.8);
 
     const simulationWithoutCard = await request(baseUrl, '/sale/simulation', {
       method: 'POST',
@@ -115,7 +115,7 @@ async function run() {
     assert.equal(simulationWithoutCard.response.status, 200);
     assert.equal(simulationWithoutCard.body.appliedCreditCardFee.fee, 0);
     assert.equal(simulationWithoutCard.body.appliedInstallmentFee.fee, 18.75);
-    assert.equal(simulationWithoutCard.body.total, 1187.5);
+    assert.equal(simulationWithoutCard.body.total, 1188);
 
     const staleDuplicate = await request(baseUrl, '/installments', {
       method: 'POST',

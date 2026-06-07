@@ -399,7 +399,8 @@ function formatTelegramSimulationResult(result) {
 }
 
 function createTelegramClient(token) {
-  const baseUrl = `https://api.telegram.org/bot${token}`;
+  const normalizedToken = normalizeTelegramBotToken(token);
+  const baseUrl = `https://api.telegram.org/bot${normalizedToken}`;
   return {
     async call(method, body) {
       const response = await fetch(`${baseUrl}/${method}`, {
@@ -414,6 +415,13 @@ function createTelegramClient(token) {
       return payload.result;
     },
   };
+}
+
+function normalizeTelegramBotToken(token) {
+  const text = String(token || '').trim().replace(/^['"]|['"]$/g, '');
+  const urlMatch = text.match(/api\.telegram\.org\/bot([^/\s]+)\//i);
+  if (urlMatch) return urlMatch[1];
+  return text.replace(/^bot/i, '');
 }
 
 async function startTelegramBot() {
@@ -494,17 +502,23 @@ async function startTelegramBot() {
     }
   }
 
-  const oldUpdates = await telegram.call('getUpdates', {
-    timeout: 0,
-    allowed_updates: ['message'],
-  });
-  for (const update of oldUpdates) {
-    offset = Math.max(offset, update.update_id + 1);
+  try {
+    const me = await telegram.call('getMe', {});
+    const oldUpdates = await telegram.call('getUpdates', {
+      timeout: 0,
+      allowed_updates: ['message'],
+    });
+    for (const update of oldUpdates) {
+      offset = Math.max(offset, update.update_id + 1);
+    }
+    console.log(`Telegram bot polling enabled for @${me.username}.`);
+  } catch (error) {
+    console.error(`Telegram bot disabled: ${error.message}. Check TELEGRAM_BOT_TOKEN.`);
+    return;
   }
 
   const intervalMs = Number(process.env.TELEGRAM_POLLING_INTERVAL_MS) || 2500;
   setInterval(poll, intervalMs);
-  console.log('Telegram bot polling enabled.');
 }
 
 function createAccessToken(user) {

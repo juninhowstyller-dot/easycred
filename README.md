@@ -169,6 +169,13 @@ nano .env
 npm start
 ```
 
+Na VPS atual com PM2, use:
+
+```bash
+cd /home/ubuntu/easycred
+./scripts/deploy-vps-pm2.sh
+```
+
 Para deixar rodando sem Docker, crie um servico systemd apontando para a pasta do projeto:
 
 ```ini

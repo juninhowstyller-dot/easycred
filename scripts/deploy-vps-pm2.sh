@@ -30,6 +30,7 @@ set_env "WHATSAPP_INSTALLMENT_PRESETS" "3,6,10,12,18"
 set_env "WHATSAPP_SESSION_TTL_MINUTES" "30"
 set_env "WHATSAPP_HUMAN_PAUSE_HOURS" "12"
 set_env "WHATSAPP_DAILY_ART_TIME" "09:00"
+set_env "WHATSAPP_DAILY_ART_PATHS" "arte1.jpg,arte2.jpg,arte3.jpg,arte4.jpg,arte5.jpg"
 
 echo "Validando bot..."
 node -c whatsapp-bot.js

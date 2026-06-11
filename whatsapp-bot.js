@@ -626,7 +626,17 @@ function dateKey(date = new Date()) {
 }
 
 function buildDailyArtContent() {
-  const source = String(process.env.WHATSAPP_DAILY_ART_PATH || '').trim();
+  const sources = String(
+    process.env.WHATSAPP_DAILY_ART_PATHS
+    || process.env.WHATSAPP_DAILY_ART_PATH
+    || ''
+  )
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+  const source = sources.length
+    ? sources[Math.floor(Date.now() / (24 * 60 * 60 * 1000)) % sources.length]
+    : '';
   if (!source) return null;
 
   const caption = process.env.WHATSAPP_DAILY_ART_CAPTION || '';
@@ -670,7 +680,8 @@ async function maybeSendDailyArt() {
 function startDailyArtScheduler(sock) {
   dailyArtSock = sock;
   if (dailyArtTimer) return;
-  if (!process.env.WHATSAPP_DAILY_GROUP_JID || !process.env.WHATSAPP_DAILY_ART_PATH) return;
+  if (!process.env.WHATSAPP_DAILY_GROUP_JID) return;
+  if (!process.env.WHATSAPP_DAILY_ART_PATH && !process.env.WHATSAPP_DAILY_ART_PATHS) return;
 
   dailyArtTimer = setInterval(() => {
     maybeSendDailyArt().catch(error => {

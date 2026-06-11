@@ -4,6 +4,7 @@ const {
   extractMessageTextAndAction,
   parseCurrencyInput,
   parseMessage,
+  resultText,
   textToActionForSession,
 } = require('../whatsapp-bot');
 
@@ -61,5 +62,19 @@ assert.deepEqual(
     action: { field: 'amount', value: '2000' },
   }
 );
+
+const renderedResult = resultText({
+  type: 'unleashed',
+  amount: 1000,
+  total: 1188,
+  installments: 10,
+  installmentValue: 118.8,
+}, {
+  cardName: 'Card',
+  installmentName: '1-18x',
+});
+
+assert.equal(renderedResult.includes('Cartao:'), false);
+assert.equal(renderedResult.includes('Parcelamento:'), false);
 
 console.log('WhatsApp bot regression test passed.');

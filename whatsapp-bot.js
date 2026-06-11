@@ -10,8 +10,10 @@ const DB_PATH = process.env.EASYCRED_DB_PATH || './data.db';
 const WHATSAPP_AUTH_DIR = process.env.WHATSAPP_AUTH_DIR || 'auth_info';
 const WHATSAPP_TIMEZONE = process.env.WHATSAPP_TIMEZONE || 'America/Sao_Paulo';
 const BOT_FOOTER = process.env.WHATSAPP_BOT_FOOTER || 'Junior Cred';
-const DEFAULT_AMOUNT_PRESETS = [1000, 2000, 3000];
-const DEFAULT_INSTALLMENT_PRESETS = [3, 6, 10, 12, 18];
+const OWNER_JID = process.env.WHATSAPP_OWNER_JID || '';
+const DEFAULT_AMOUNT_PRESETS = [1000, 2000, 3000, 4000, 5000];
+const DEFAULT_INSTALLMENT_PRESETS = [10, 12, 18];
+const QUICK_SIMULATION_INSTALLMENTS = [10, 12, 18];
 const SESSION_TTL_MS = (Number(process.env.WHATSAPP_SESSION_TTL_MINUTES) || 30) * 60 * 1000;
 const HUMAN_PAUSE_HOURS = process.env.WHATSAPP_HUMAN_PAUSE_HOURS == null
   ? 12
@@ -431,11 +433,18 @@ function textToActionForSession(session, text) {
 
 function menuText() {
   return [
-    'Ola! Bem-vindo a Junior Cred.',
+    'Junior Cred',
     '',
-    'Escolha uma opcao para simular por botoes.',
-    'Se preferir, pode escrever uma frase completa, tipo:',
-    'tenho 3 mil de limite quanto recebo?',
+    'Ola! Seja bem-vindo.',
+    '',
+    'Escolha uma opcao:',
+    '',
+    '1. Fazer simulacao',
+    '2. Ver tabela',
+    '3. Falar com atendente',
+    '',
+    'Voce tambem pode digitar direto o valor.',
+    'Exemplo: 1000 ou tenho 3 mil de limite quanto recebo?',
   ].join('\n');
 }
 
@@ -456,8 +465,7 @@ function resultText(result, fees) {
   lines.push(`Parcelas: ${result.installments}x`);
   lines.push(`Valor da parcela: ${formatCurrency(result.installmentValue)}`);
   lines.push('');
-  lines.push(`Cartao: ${fees.cardName}`);
-  lines.push(`Parcelamento: ${fees.installmentName}`);
+  lines.push('Digite 3 para falar com um atendente.');
 
   return lines.join('\n');
 }
@@ -505,6 +513,175 @@ async function sendBotMessage(sock, jid, content) {
   return message;
 }
 
+function ownerJid() {
+  return String(OWNER_JID || '').trim();
+}
+
+async function notifyOwner(sock, customerJid, text, amount) {
+  const target = ownerJid();
+  if (!target || target === customerJid) return;
+
+  const lines = [
+    'Novo interessado - Junior Cred',
+    '',
+    `Contato: ${customerJid}`,
+  ];
+
+  if (amount) lines.push(`Valor: ${formatCurrency(amount)}`);
+  if (text) lines.push(`Mensagem: ${text}`);
+
+  await sendBotMessage(sock, target, { text: lines.join('\n') });
+}
+
+async function sendAttendantMessage(sock, jid) {
+  const phone = process.env.WHATSAPP_ATTENDANT_PHONE || '5527997584986';
+  await sendBotMessage(sock, jid, {
+    text: [
+      'Atendimento Junior Cred',
+      '',
+      'Um atendente vai continuar com voce.',
+      '',
+      `Link direto: https://wa.me/${phone}`,
+    ].join('\n'),
+  });
+}
+
+async function sendQuickSimulation(sock, jid, amount, type = 'unleashed') {
+  const lines = [
+    'Simulacao Junior Cred',
+    '',
+  ];
+
+  if (type === 'limit') {
+    lines.push(`Limite informado: ${formatCurrency(amount)}`);
+  } else {
+    lines.push(`Valor para receber: ${formatCurrency(amount)}`);
+  }
+
+  lines.push('');
+
+  for (const installments of QUICK_SIMULATION_INSTALLMENTS) {
+    const fees = await getConfiguredFees(installments);
+    const result = calculateSimulation(
+      amount,
+      installments,
+      type,
+      fees.creditCardFee,
+      fees.installmentFee
+    );
+
+    lines.push(`${installments}x de ${formatCurrency(result.installmentValue)}`);
+    if (type === 'limit') {
+      lines.push(`Voce recebe aproximadamente: ${formatCurrency(result.total)}`);
+    } else {
+      lines.push(`Total a passar: ${formatCurrency(result.total)}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('Digite 3 para falar com um atendente.');
+  await sendBotMessage(sock, jid, { text: lines.join('\n') });
+}
+
+async function sendDynamicTable(sock, jid) {
+  const amounts = [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000];
+  const lines = [
+    'Tabela Junior Cred',
+    '',
+    'Dinheiro liberado na hora',
+    '',
+  ];
+
+  for (const installments of QUICK_SIMULATION_INSTALLMENTS) {
+    const fees = await getConfiguredFees(installments);
+    lines.push(`${installments}x`);
+    for (const amount of amounts) {
+      const result = calculateSimulation(
+        amount,
+        installments,
+        'unleashed',
+        fees.creditCardFee,
+        fees.installmentFee
+      );
+      lines.push(`${formatCurrency(amount)} -> ${installments}x de ${formatCurrency(result.installmentValue)}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('Digite um valor para simular.');
+  await sendBotMessage(sock, jid, { text: lines.join('\n') });
+}
+
+async function sendDailyArtPreview(sock, jid, caption = 'Junior Cred\n\nDinheiro liberado na hora.') {
+  try {
+    const content = buildDailyArtContent();
+    if (content?.image) {
+      await sendBotMessage(sock, jid, { ...content, caption });
+    }
+  } catch (error) {
+    console.error(`Falha ao enviar arte no privado: ${error.message}`);
+  }
+}
+
+function hotLeadIntent(text) {
+  const normalized = normalizeText(text);
+  return [
+    'quero',
+    'vamos fechar',
+    'como faco',
+    'posso fazer agora',
+    'fazer agora',
+    'tenho interesse',
+    'interesse',
+  ].some(item => normalized.includes(item));
+}
+
+function faqReply(text) {
+  const normalized = normalizeText(text);
+  const replies = [
+    {
+      words: ['como funciona', 'funciona como', 'me explica'],
+      text: [
+        'Funciona assim:',
+        '',
+        'Voce informa o valor que deseja receber e eu calculo as opcoes de parcelamento.',
+        '',
+        'Exemplo: digite 1000 ou 2500 para simular.',
+      ].join('\n'),
+    },
+    {
+      words: ['cai na hora', 'recebe na hora', 'libera na hora', 'dinheiro na hora', 'cai rapido'],
+      text: 'Apos a aprovacao, o valor pode ser liberado rapidamente via Pix. Digite o valor desejado para simular.',
+    },
+    {
+      words: ['taxa', 'juros', 'quanto fica'],
+      text: 'As condicoes variam conforme valor e quantidade de parcelas. Digite um valor para ver a simulacao.',
+    },
+    {
+      words: ['precisa ter limite', 'precisa de limite', 'tem que ter limite', 'nao tenho limite'],
+      text: 'E necessario ter limite disponivel no cartao de credito para fazer a operacao.',
+    },
+    {
+      words: ['nome sujo', 'negativado', 'score baixo'],
+      text: 'Nome negativado nao impede a simulacao, mas a operacao depende da aprovacao no cartao.',
+    },
+    {
+      words: ['pix', 'recebo pix', 'manda pix'],
+      text: 'Sim, o valor pode ser enviado via Pix apos a aprovacao.',
+    },
+    {
+      words: ['documento', 'documentos', 'o que precisa', 'quais documentos'],
+      text: 'Para verificar os requisitos certinhos, digite 3 e fale com um atendente.',
+    },
+    {
+      words: ['debito'],
+      text: 'A operacao e feita no cartao de credito. Digite o valor que deseja receber para simular.',
+    },
+  ];
+
+  return replies.find(item => item.words.some(word => normalized.includes(word)))?.text || '';
+}
+
 async function sendButtons(sock, jid, text, buttons, fallbackText) {
   const chunks = [];
   for (let index = 0; index < buttons.length; index += 3) {
@@ -528,14 +705,15 @@ async function sendButtons(sock, jid, text, buttons, fallbackText) {
 }
 
 async function sendSimulationMenu(sock, jid) {
-  saveSession(jid, {});
+  pendingSessions.delete(jid);
   await sendButtons(sock, jid, menuText(), [
-    button('sim:type:limit', 'Tenho limite'),
-    button('sim:type:unleashed', 'Quero valor'),
+    button('menu:simulate', 'Fazer simulacao'),
+    button('menu:table', 'Ver tabela'),
+    button('menu:attendant', 'Falar com atendente'),
   ], [
     menuText(),
     '',
-    'Responda com "tenho limite" ou "quero valor".',
+    'Responda 1, 2 ou 3.',
   ].join('\n'));
 }
 
@@ -583,9 +761,16 @@ function saveSession(jid, session) {
 }
 
 function parseButtonAction(id) {
+  const menuMatch = String(id || '').match(/^menu:(simulate|table|attendant)$/);
+  if (menuMatch) {
+    return {
+      field: 'menu',
+      value: menuMatch[1],
+    };
+  }
+
   const match = String(id || '').match(/^sim:(type|amount|installments):(.+)$/);
   if (!match) return null;
-
   return {
     field: match[1],
     value: match[2],
@@ -686,6 +871,8 @@ async function finishOrAskNext(sock, jid, session) {
 }
 
 async function handleCustomerMessage(sock, jid, text, action) {
+  const normalized = normalizeText(text);
+
   if (isStatusRequest(text)) {
     await sendBotMessage(sock, jid, {
       text: 'Bot online. Recebi sua mensagem e estou pronto para simular.',
@@ -699,16 +886,74 @@ async function handleCustomerMessage(sock, jid, text, action) {
   }
 
   const hasActiveSession = pendingSessions.has(jid);
-  if (!action && !hasActiveSession && !looksLikeSimulationRequest(text)) return;
+
+  if (!hasActiveSession && (action?.field === 'menu' || ['1', '2', '3'].includes(normalized))) {
+    const menuValue = action?.value
+      || (normalized === '1' ? 'simulate' : normalized === '2' ? 'table' : 'attendant');
+
+    if (menuValue === 'simulate') {
+      const session = getSession(jid);
+      await askType(sock, jid);
+      saveSession(jid, session);
+      return;
+    }
+
+    if (menuValue === 'table') {
+      await sendDailyArtPreview(sock, jid);
+      await sendDynamicTable(sock, jid);
+      return;
+    }
+
+    if (menuValue === 'attendant') {
+      await sendAttendantMessage(sock, jid);
+      await notifyOwner(sock, jid, text, null);
+      return;
+    }
+  }
+
+  if (!hasActiveSession && (normalized === 'tabela' || normalized === 'ver tabela')) {
+    await sendDailyArtPreview(sock, jid);
+    await sendDynamicTable(sock, jid);
+    return;
+  }
+
+  if (!hasActiveSession && (normalized === 'atendente' || normalized === 'falar com atendente')) {
+    await sendAttendantMessage(sock, jid);
+    await notifyOwner(sock, jid, text, null);
+    return;
+  }
+
+  if (!hasActiveSession && hotLeadIntent(text)) {
+    await sendAttendantMessage(sock, jid);
+    await notifyOwner(sock, jid, text, null);
+    return;
+  }
+
+  const parsedMessage = parseMessage(text);
+  if (!hasActiveSession && parsedMessage?.amount && !parsedMessage.installments) {
+    const type = parsedMessage.type || 'unleashed';
+    await sendQuickSimulation(sock, jid, parsedMessage.amount, type);
+    await notifyOwner(sock, jid, text, parsedMessage.amount);
+    return;
+  }
+
+  if (!action && !hasActiveSession && !looksLikeSimulationRequest(text)) {
+    const reply = faqReply(text);
+    if (reply) await sendBotMessage(sock, jid, { text: reply });
+    return;
+  }
+
   const session = getSession(jid);
   const inferredAction = action || textToActionForSession(session, text);
   applyActionToSession(session, inferredAction);
 
   if (!(inferredAction && numericChoice(text) != null)) {
-    applyParsedToSession(session, parseMessage(text));
+    applyParsedToSession(session, parsedMessage);
   }
 
   await finishOrAskNext(sock, jid, session);
+
+  if (session.amount && session.installments) await notifyOwner(sock, jid, text, session.amount);
 }
 
 async function handleOwnerPrivateMessage(sock, jid, msg, text) {

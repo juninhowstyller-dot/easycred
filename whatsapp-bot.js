@@ -16,6 +16,7 @@ const WHATSAPP_AUTH_DIR = process.env.WHATSAPP_AUTH_DIR || 'auth_info';
 const WHATSAPP_TIMEZONE = process.env.WHATSAPP_TIMEZONE || 'America/Sao_Paulo';
 const BOT_FOOTER = process.env.WHATSAPP_BOT_FOOTER || 'Junior Cred';
 const OWNER_JID = process.env.WHATSAPP_OWNER_JID || '';
+const BUTTON_MODE = process.env.WHATSAPP_BUTTON_MODE || 'text';
 const DEFAULT_AMOUNT_PRESETS = [1000, 2000, 3000, 4000, 5000];
 const DEFAULT_INSTALLMENT_PRESETS = [10, 12, 18];
 const QUICK_SIMULATION_INSTALLMENTS = [10, 12, 18];
@@ -537,6 +538,20 @@ async function sendButtonMessage(sock, jid, text, buttons) {
   return message;
 }
 
+async function withTimeout(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function ownerJid() {
   return String(OWNER_JID || '').trim();
 }
@@ -707,6 +722,12 @@ function faqReply(text) {
 }
 
 async function sendButtons(sock, jid, text, buttons, fallbackText) {
+  const plainText = fallbackText || optionsText(text, buttons);
+  if (BUTTON_MODE !== 'protocol') {
+    await sendBotMessage(sock, jid, { text: plainText });
+    return;
+  }
+
   const chunks = [];
   for (let index = 0; index < buttons.length; index += 3) {
     chunks.push(buttons.slice(index, index + 3));
@@ -715,11 +736,11 @@ async function sendButtons(sock, jid, text, buttons, fallbackText) {
   try {
     for (let index = 0; index < chunks.length; index += 1) {
       const body = optionsText(index === 0 ? text : 'Mais opcoes:', chunks[index]);
-      await sendButtonMessage(sock, jid, body, chunks[index]);
+      await withTimeout(sendButtonMessage(sock, jid, body, chunks[index]), 5000, 'WhatsApp buttons');
     }
   } catch (error) {
     console.error('WhatsApp buttons failed, sending text fallback:', error.message);
-    await sendBotMessage(sock, jid, { text: fallbackText || optionsText(text, buttons) });
+    await sendBotMessage(sock, jid, { text: plainText });
   }
 }
 

@@ -22,6 +22,7 @@ set_env() {
 set_env "WHATSAPP_AUTH_DIR" "auth_info"
 set_env "WHATSAPP_TIMEZONE" "America/Sao_Paulo"
 set_env "WHATSAPP_DEBUG" "false"
+set_env "WHATSAPP_BUTTON_MODE" "text"
 set_env "WHATSAPP_BOT_FOOTER" "Junior Cred"
 set_env "WHATSAPP_OWNER_JID" "5527997584986@s.whatsapp.net"
 set_env "WHATSAPP_ATTENDANT_PHONE" "5527997584986"

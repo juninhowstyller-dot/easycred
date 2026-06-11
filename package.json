@@ -7,10 +7,12 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "npm run test:session && npm run test:installments && npm run test:vercel-storage",
+    "start:whatsapp": "node whatsapp-bot.js",
+    "test": "npm run test:session && npm run test:installments && npm run test:vercel-storage && npm run test:whatsapp",
     "test:installments": "node test/installment-regression.test.cjs",
     "test:session": "node test/session-regression.test.cjs",
-    "test:vercel-storage": "node test/vercel-storage-regression.test.cjs"
+    "test:vercel-storage": "node test/vercel-storage-regression.test.cjs",
+    "test:whatsapp": "node test/whatsapp-bot-regression.test.cjs"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc13",

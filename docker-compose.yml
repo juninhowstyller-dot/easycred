@@ -10,5 +10,20 @@ services:
     volumes:
       - easycred-data:/app/data
 
+  easycred-whatsapp:
+    build: .
+    container_name: easycred-whatsapp
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      EASYCRED_DB_PATH: /app/data/data.db
+      WHATSAPP_AUTH_DIR: /app/data/auth_info
+    command: ["node", "whatsapp-bot.js"]
+    volumes:
+      - easycred-data:/app/data
+    depends_on:
+      - easycred
+
 volumes:
   easycred-data:

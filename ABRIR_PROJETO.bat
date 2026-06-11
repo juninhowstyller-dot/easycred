@@ -7,7 +7,9 @@ if not exist node_modules (
 )
 
 echo.
-echo Easy Cred rodando em http://localhost:3000
-echo Para parar, feche esta janela ou pressione Ctrl+C.
+echo Abrindo Easy Cred em duas janelas:
+echo - Painel: http://localhost:3000
+echo - Bot WhatsApp: leia o QR Code se aparecer
 echo.
-npm start
+start "Easy Cred - Painel" cmd /k "cd /d ""%~dp0"" && npm start"
+start "Easy Cred - WhatsApp Bot" cmd /k "cd /d ""%~dp0"" && npm run start:whatsapp"

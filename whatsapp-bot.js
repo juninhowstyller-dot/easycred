@@ -8,6 +8,7 @@ const sqlite3 = require('sqlite3').verbose();
 
 const DB_PATH = process.env.EASYCRED_DB_PATH || './data.db';
 const WHATSAPP_AUTH_DIR = process.env.WHATSAPP_AUTH_DIR || 'auth_info';
+const WHATSAPP_TIMEZONE = process.env.WHATSAPP_TIMEZONE || 'America/Sao_Paulo';
 const BOT_FOOTER = process.env.WHATSAPP_BOT_FOOTER || 'Junior Cred';
 const DEFAULT_AMOUNT_PRESETS = [1000, 2000, 3000];
 const DEFAULT_INSTALLMENT_PRESETS = [3, 6, 10, 12, 18];
@@ -17,6 +18,9 @@ const HUMAN_PAUSE_HOURS = process.env.WHATSAPP_HUMAN_PAUSE_HOURS == null
   : Number(process.env.WHATSAPP_HUMAN_PAUSE_HOURS);
 const HUMAN_PAUSE_MS = Math.max(0, Number.isFinite(HUMAN_PAUSE_HOURS) ? HUMAN_PAUSE_HOURS : 12) * 60 * 60 * 1000;
 const BOT_SENT_TTL_MS = 2 * 60 * 1000;
+const DEBUG_LOGS = process.env.WHATSAPP_DEBUG === 'true';
+
+if (!process.env.TZ) process.env.TZ = WHATSAPP_TIMEZONE;
 
 const pendingSessions = new Map();
 const botSentMessages = new Map();
@@ -24,6 +28,10 @@ const seenGroupJids = new Set();
 let dailyArtSock = null;
 let dailyArtTimer = null;
 let lastDailyArtDate = '';
+
+function debugLog(message) {
+  if (DEBUG_LOGS) console.log(message);
+}
 
 function parseJson(value, fallback) {
   try {
@@ -146,6 +154,35 @@ async function ensurePauseTable(db) {
   if (!columns.some(column => column.name === 'expires_at')) {
     await runSql(db, 'ALTER TABLE whatsapp_human_pauses ADD COLUMN expires_at TEXT');
   }
+}
+
+async function ensureStateTable(db) {
+  await runSql(db, `
+    CREATE TABLE IF NOT EXISTS whatsapp_bot_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+}
+
+async function getBotState(key) {
+  return withDb(async db => {
+    await ensureStateTable(db);
+    const row = await getFirstRow(db, 'SELECT value FROM whatsapp_bot_state WHERE key = ?', [key]);
+    return row?.value || '';
+  });
+}
+
+async function setBotState(key, value) {
+  await withDb(async db => {
+    await ensureStateTable(db);
+    await runSql(
+      db,
+      'INSERT OR REPLACE INTO whatsapp_bot_state (key, value, updated_at) VALUES (?, ?, ?)',
+      [key, String(value), new Date().toISOString()]
+    );
+  });
 }
 
 async function pauseHumanChat(jid) {
@@ -347,6 +384,51 @@ function isLikelyBotOutgoingText(text) {
   ].some(item => normalized.includes(item));
 }
 
+function isMenuRequest(text) {
+  return ['oi', 'ola', 'menu', 'ajuda', 'simular', 'simulacao'].includes(normalizeText(text));
+}
+
+function numericChoice(text) {
+  const match = normalizeText(text).match(/^(?:opcao\s*)?(\d{1,6})$/);
+  return match ? Number(match[1]) : null;
+}
+
+function textToActionForSession(session, text) {
+  const normalized = normalizeText(text);
+  const choice = numericChoice(text);
+
+  if (!session.type) {
+    if (choice === 1 || /\b(tenho\s+limite|com\s+limite|limite)\b/.test(normalized)) {
+      return { field: 'type', value: 'limit' };
+    }
+    if (choice === 2 || /\b(quero\s+valor|sem\s+limite|receber|solicitado)\b/.test(normalized)) {
+      return { field: 'type', value: 'unleashed' };
+    }
+  }
+
+  if (session.type && !session.amount && choice != null) {
+    const amounts = getAmountPresets();
+    if (choice >= 1 && choice <= amounts.length) {
+      return { field: 'amount', value: String(amounts[choice - 1]) };
+    }
+    if (choice >= 100) {
+      return { field: 'amount', value: String(choice) };
+    }
+  }
+
+  if (session.type && session.amount && !session.installments && choice != null) {
+    const installments = getInstallmentPresets();
+    if (installments.includes(choice)) {
+      return { field: 'installments', value: String(choice) };
+    }
+    if (choice >= 1 && choice <= installments.length && /^opcao\s*\d+$/.test(normalized)) {
+      return { field: 'installments', value: String(installments[choice - 1]) };
+    }
+  }
+
+  return null;
+}
+
 function menuText() {
   return [
     'Ola! Bem-vindo a Junior Cred.',
@@ -388,6 +470,21 @@ function button(id, text) {
   };
 }
 
+function buttonLabel(item) {
+  return item?.buttonText?.displayText || item?.text || '';
+}
+
+function optionsText(text, buttons) {
+  const optionLines = buttons.map((item, index) => `${index + 1}. ${buttonLabel(item)}`);
+  return [
+    text,
+    '',
+    ...optionLines,
+    '',
+    'Responda com o numero da opcao ou toque em um botao.',
+  ].join('\n');
+}
+
 function rememberBotMessage(jid, message) {
   const id = message?.key?.id;
   if (!id) return;
@@ -416,8 +513,9 @@ async function sendButtons(sock, jid, text, buttons, fallbackText) {
 
   try {
     for (let index = 0; index < chunks.length; index += 1) {
+      const body = optionsText(index === 0 ? text : 'Mais opcoes:', chunks[index]);
       await sendBotMessage(sock, jid, {
-        text: index === 0 ? text : 'Mais opcoes:',
+        text: body,
         footer: BOT_FOOTER,
         buttons: chunks[index],
         headerType: 1,
@@ -425,12 +523,12 @@ async function sendButtons(sock, jid, text, buttons, fallbackText) {
     }
   } catch (error) {
     console.error('WhatsApp buttons failed, sending text fallback:', error.message);
-    await sendBotMessage(sock, jid, { text: fallbackText || text });
+    await sendBotMessage(sock, jid, { text: fallbackText || optionsText(text, buttons) });
   }
 }
 
 async function sendSimulationMenu(sock, jid) {
-  pendingSessions.delete(jid);
+  saveSession(jid, {});
   await sendButtons(sock, jid, menuText(), [
     button('sim:type:limit', 'Tenho limite'),
     button('sim:type:unleashed', 'Quero valor'),
@@ -600,11 +698,16 @@ async function handleCustomerMessage(sock, jid, text, action) {
     return;
   }
 
-  if (!action && !looksLikeSimulationRequest(text)) return;
-
+  const hasActiveSession = pendingSessions.has(jid);
+  if (!action && !hasActiveSession && !looksLikeSimulationRequest(text)) return;
   const session = getSession(jid);
-  applyActionToSession(session, action);
-  applyParsedToSession(session, parseMessage(text));
+  const inferredAction = action || textToActionForSession(session, text);
+  applyActionToSession(session, inferredAction);
+
+  if (!(inferredAction && numericChoice(text) != null)) {
+    applyParsedToSession(session, parseMessage(text));
+  }
+
   await finishOrAskNext(sock, jid, session);
 }
 
@@ -680,8 +783,9 @@ async function maybeSendDailyArt() {
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   const scheduledMinutes = scheduled.hour * 60 + scheduled.minute;
   const today = dateKey(now);
+  const storedDailyArtDate = lastDailyArtDate || await getBotState('daily_art_date');
 
-  if (currentMinutes < scheduledMinutes || lastDailyArtDate === today) return;
+  if (currentMinutes < scheduledMinutes || storedDailyArtDate === today) return;
 
   try {
     const content = buildDailyArtContent();
@@ -689,6 +793,7 @@ async function maybeSendDailyArt() {
 
     await sendBotMessage(dailyArtSock, groupJid, content);
     lastDailyArtDate = today;
+    await setBotState('daily_art_date', today);
     console.log(`Arte diaria enviada para ${groupJid}.`);
   } catch (error) {
     lastDailyArtDate = today;
@@ -735,12 +840,10 @@ async function startBot() {
     }
   });
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages[0];
+  async function handleWhatsAppMessage(msg) {
     try {
-      console.log(`Evento messages.upsert recebido com ${messages.length} mensagem(ns).`);
       if (!msg?.message) {
-        console.log('Evento ignorado: mensagem sem conteudo.');
+        debugLog('Evento ignorado: mensagem sem conteudo.');
         return;
       }
 
@@ -748,11 +851,11 @@ async function startBot() {
       const isGroup = isGroupJid(jid);
       const { text, action } = extractMessageTextAndAction(msg.message);
 
-      console.log(`Mensagem bruta: jid=${jid} fromMe=${Boolean(msg.key.fromMe)} tipo=${Object.keys(msg.message).join(',')}`);
+      debugLog(`Mensagem bruta: jid=${jid} fromMe=${Boolean(msg.key.fromMe)} tipo=${Object.keys(msg.message).join(',')}`);
 
       if (msg.key.fromMe) {
         if (isLikelyBotOutgoingText(text)) {
-          console.log(`Eco de mensagem do bot em ${jid}; atendimento humano nao pausado.`);
+          debugLog(`Eco de mensagem do bot em ${jid}; atendimento humano nao pausado.`);
           return;
         }
         if (text) console.log(`Mensagem enviada por voce em ${jid}; pausando atendimento humano.`);
@@ -766,7 +869,7 @@ async function startBot() {
       }
 
       if (isStatusRequest(text)) {
-        console.log(`Teste de status recebido em ${jid}.`);
+        debugLog(`Teste de status recebido em ${jid}.`);
         await handleCustomerMessage(sock, jid, text, action);
         return;
       }
@@ -788,6 +891,13 @@ async function startBot() {
         });
       }
     }
+  }
+
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    debugLog(`Evento messages.upsert recebido com ${messages.length} mensagem(ns).`);
+    for (const msg of messages) {
+      await handleWhatsAppMessage(msg);
+    }
   });
 }
 
@@ -806,4 +916,5 @@ module.exports = {
   parseSimulationType,
   resultText,
   startBot,
+  textToActionForSession,
 };

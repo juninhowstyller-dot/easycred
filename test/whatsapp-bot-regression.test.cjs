@@ -4,6 +4,7 @@ const {
   extractMessageTextAndAction,
   parseCurrencyInput,
   parseMessage,
+  textToActionForSession,
 } = require('../whatsapp-bot');
 
 assert.equal(parseCurrencyInput('1.500,00'), 1500);
@@ -31,6 +32,21 @@ assert.deepEqual(parseMessage('quero receber 2000 em 12 vezes'), {
   amount: 2000,
   installments: 12,
   type: 'unleashed',
+});
+
+assert.deepEqual(textToActionForSession({}, '1'), {
+  field: 'type',
+  value: 'limit',
+});
+
+assert.deepEqual(textToActionForSession({ type: 'limit' }, '2'), {
+  field: 'amount',
+  value: '2000',
+});
+
+assert.deepEqual(textToActionForSession({ type: 'limit', amount: 2000 }, '10'), {
+  field: 'installments',
+  value: '10',
 });
 
 assert.deepEqual(

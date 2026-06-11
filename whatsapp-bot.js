@@ -328,6 +328,25 @@ function looksLikeSimulationRequest(text) {
     || /\b(simular|simulacao|limite|recebo|receber|dinheiro|emprestimo|parcelas?|vezes)\b/.test(normalized);
 }
 
+function isLikelyBotOutgoingText(text) {
+  const normalized = normalizeText(text);
+  return [
+    'ola! bem-vindo',
+    'bot online',
+    'escolha uma opcao',
+    'mais opcoes',
+    'voce quer simular',
+    'escolha o valor',
+    'em quantas parcelas',
+    'parcelas permitidas',
+    'simulacao com limite',
+    'simulacao sem limite',
+    'nao consegui simular',
+    'cartao:',
+    'parcelamento:',
+  ].some(item => normalized.includes(item));
+}
+
 function menuText() {
   return [
     'Ola! Bem-vindo a Junior Cred.',
@@ -732,6 +751,10 @@ async function startBot() {
       console.log(`Mensagem bruta: jid=${jid} fromMe=${Boolean(msg.key.fromMe)} tipo=${Object.keys(msg.message).join(',')}`);
 
       if (msg.key.fromMe) {
+        if (isLikelyBotOutgoingText(text)) {
+          console.log(`Eco de mensagem do bot em ${jid}; atendimento humano nao pausado.`);
+          return;
+        }
         if (text) console.log(`Mensagem enviada por voce em ${jid}; pausando atendimento humano.`);
         if (!isGroup) await handleOwnerPrivateMessage(sock, jid, msg, text);
         return;

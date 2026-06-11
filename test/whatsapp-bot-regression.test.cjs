@@ -5,6 +5,7 @@ const {
   parseCurrencyInput,
   parseMessage,
   resultText,
+  sendButtonMessage,
   textToActionForSession,
 } = require('../whatsapp-bot');
 
@@ -77,4 +78,28 @@ const renderedResult = resultText({
 assert.equal(renderedResult.includes('Cartao:'), false);
 assert.equal(renderedResult.includes('Parcelamento:'), false);
 
-console.log('WhatsApp bot regression test passed.');
+async function runAsyncChecks() {
+  const relayed = [];
+  await sendButtonMessage({
+    user: { id: 'bot@s.whatsapp.net' },
+    relayMessage(jid, message, options) {
+      relayed.push({ jid, message, options });
+      return Promise.resolve();
+    },
+  }, 'customer@s.whatsapp.net', 'Escolha:', [
+    { buttonId: 'sim:type:limit', buttonText: { displayText: 'Tenho limite' }, type: 1 },
+  ]);
+
+  assert.equal(relayed.length, 1);
+  assert.equal(relayed[0].jid, 'customer@s.whatsapp.net');
+  assert.ok(relayed[0].message.buttonsMessage);
+  assert.equal(relayed[0].message.buttonsMessage.buttons[0].buttonId, 'sim:type:limit');
+  assert.ok(relayed[0].options.messageId);
+}
+
+runAsyncChecks().then(() => {
+  console.log('WhatsApp bot regression test passed.');
+}).catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

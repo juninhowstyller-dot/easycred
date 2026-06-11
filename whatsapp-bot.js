@@ -2,7 +2,12 @@ require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const {
+  default: makeWASocket,
+  DisconnectReason,
+  generateWAMessageFromContent,
+  useMultiFileAuthState,
+} = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const sqlite3 = require('sqlite3').verbose();
 
@@ -513,6 +518,25 @@ async function sendBotMessage(sock, jid, content) {
   return message;
 }
 
+async function sendButtonMessage(sock, jid, text, buttons) {
+  const message = generateWAMessageFromContent(jid, {
+    buttonsMessage: {
+      contentText: text,
+      footerText: BOT_FOOTER,
+      buttons,
+      headerType: 1,
+    },
+  }, {
+    userJid: sock.user?.id,
+  });
+
+  await sock.relayMessage(jid, message.message, {
+    messageId: message.key.id,
+  });
+  rememberBotMessage(jid, message);
+  return message;
+}
+
 function ownerJid() {
   return String(OWNER_JID || '').trim();
 }
@@ -691,12 +715,7 @@ async function sendButtons(sock, jid, text, buttons, fallbackText) {
   try {
     for (let index = 0; index < chunks.length; index += 1) {
       const body = optionsText(index === 0 ? text : 'Mais opcoes:', chunks[index]);
-      await sendBotMessage(sock, jid, {
-        text: body,
-        footer: BOT_FOOTER,
-        buttons: chunks[index],
-        headerType: 1,
-      });
+      await sendButtonMessage(sock, jid, body, chunks[index]);
     }
   } catch (error) {
     console.error('WhatsApp buttons failed, sending text fallback:', error.message);
@@ -1160,6 +1179,7 @@ module.exports = {
   parseMessage,
   parseSimulationType,
   resultText,
+  sendButtonMessage,
   startBot,
   textToActionForSession,
 };

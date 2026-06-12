@@ -566,16 +566,72 @@ function ownerJid() {
   return String(OWNER_JID || '').trim();
 }
 
-async function notifyOwner(sock, customerJid, text, amount) {
+function isLidJid(jid) {
+  return /@(?:hosted\.)?lid$/i.test(String(jid || ''));
+}
+
+function phoneDigitsFromJid(jid) {
+  const rawUser = String(jid || '').split('@')[0].split(':')[0];
+  const digits = rawUser.replace(/\D/g, '');
+  return digits.length >= 10 ? digits : '';
+}
+
+async function resolvePhoneJid(sock, customerJid, messageKey = {}) {
+  const candidates = [
+    messageKey.remoteJidAlt,
+    messageKey.participantAlt,
+    messageKey.participant,
+    messageKey.remoteJid,
+    customerJid,
+  ].filter(Boolean);
+
+  const phoneCandidate = candidates.find(item => phoneDigitsFromJid(item));
+  if (phoneCandidate && !isLidJid(phoneCandidate)) return phoneCandidate;
+
+  const lidCandidate = candidates.find(isLidJid);
+  if (!lidCandidate) return '';
+
+  try {
+    return await sock.signalRepository?.lidMapping?.getPNForLID(lidCandidate) || '';
+  } catch (error) {
+    debugLog(`Nao foi possivel resolver LID ${lidCandidate}: ${error.message}`);
+    return '';
+  }
+}
+
+async function buildCustomerContact(sock, customerJid, customer = {}) {
+  const phoneJid = await resolvePhoneJid(sock, customerJid, customer.messageKey);
+  const digits = phoneDigitsFromJid(phoneJid)
+    || (!isLidJid(customerJid) ? phoneDigitsFromJid(customerJid) : '');
+  const name = String(customer.pushName || '').trim();
+
+  if (digits) {
+    return {
+      name,
+      display: `${name ? `${name} - ` : ''}+${digits}`,
+      link: `https://wa.me/${digits}`,
+    };
+  }
+
+  return {
+    name,
+    display: name || 'numero ainda nao resolvido pelo WhatsApp',
+    link: '',
+  };
+}
+
+async function notifyOwner(sock, customerJid, text, amount, customer = {}) {
   const target = ownerJid();
   if (!target || target === customerJid) return;
 
+  const contact = await buildCustomerContact(sock, customerJid, customer);
   const lines = [
     'Novo interessado - Junior Cred',
     '',
-    `Contato: ${customerJid}`,
+    `Contato: ${contact.display}`,
   ];
 
+  if (contact.link) lines.push(`WhatsApp: ${contact.link}`);
   if (amount) lines.push(`Valor: ${formatCurrency(amount)}`);
   if (text) lines.push(`Mensagem: ${text}`);
 
@@ -881,7 +937,7 @@ function applyParsedToSession(session, parsed) {
   if (parsed.type) session.type = parsed.type;
 }
 
-async function finishOrAskNext(sock, jid, session) {
+async function finishOrAskNext(sock, jid, session, customer = {}) {
   saveSession(jid, session);
 
   if (!session.type) {
@@ -920,7 +976,7 @@ async function finishOrAskNext(sock, jid, session) {
   await sendBotMessage(sock, jid, { text: resultText(result, fees) });
 }
 
-async function handleCustomerMessage(sock, jid, text, action) {
+async function handleCustomerMessage(sock, jid, text, action, customer = {}) {
   const normalized = normalizeText(text);
 
   if (isStatusRequest(text)) {
@@ -956,7 +1012,7 @@ async function handleCustomerMessage(sock, jid, text, action) {
 
     if (menuValue === 'attendant') {
       await sendAttendantMessage(sock, jid);
-      await notifyOwner(sock, jid, text, null);
+      await notifyOwner(sock, jid, text, null, customer);
       return;
     }
   }
@@ -969,13 +1025,13 @@ async function handleCustomerMessage(sock, jid, text, action) {
 
   if (!hasActiveSession && (normalized === 'atendente' || normalized === 'falar com atendente')) {
     await sendAttendantMessage(sock, jid);
-    await notifyOwner(sock, jid, text, null);
+    await notifyOwner(sock, jid, text, null, customer);
     return;
   }
 
   if (!hasActiveSession && hotLeadIntent(text)) {
     await sendAttendantMessage(sock, jid);
-    await notifyOwner(sock, jid, text, null);
+    await notifyOwner(sock, jid, text, null, customer);
     return;
   }
 
@@ -983,7 +1039,7 @@ async function handleCustomerMessage(sock, jid, text, action) {
   if (!hasActiveSession && parsedMessage?.amount && !parsedMessage.installments) {
     const type = parsedMessage.type || 'unleashed';
     await sendQuickSimulation(sock, jid, parsedMessage.amount, type);
-    await notifyOwner(sock, jid, text, parsedMessage.amount);
+    await notifyOwner(sock, jid, text, parsedMessage.amount, customer);
     return;
   }
 
@@ -1001,9 +1057,9 @@ async function handleCustomerMessage(sock, jid, text, action) {
     applyParsedToSession(session, parsedMessage);
   }
 
-  await finishOrAskNext(sock, jid, session);
+  await finishOrAskNext(sock, jid, session, customer);
 
-  if (session.amount && session.installments) await notifyOwner(sock, jid, text, session.amount);
+  if (session.amount && session.installments) await notifyOwner(sock, jid, text, session.amount, customer);
 }
 
 async function handleOwnerPrivateMessage(sock, jid, msg, text) {
@@ -1145,6 +1201,10 @@ async function startBot() {
       const jid = msg.key.remoteJid;
       const isGroup = isGroupJid(jid);
       const { text, action } = extractMessageTextAndAction(msg.message);
+      const customer = {
+        messageKey: msg.key,
+        pushName: msg.pushName,
+      };
 
       debugLog(`Mensagem bruta: jid=${jid} fromMe=${Boolean(msg.key.fromMe)} tipo=${Object.keys(msg.message).join(',')}`);
 
@@ -1165,7 +1225,7 @@ async function startBot() {
 
       if (isStatusRequest(text)) {
         debugLog(`Teste de status recebido em ${jid}.`);
-        await handleCustomerMessage(sock, jid, text, action);
+        await handleCustomerMessage(sock, jid, text, action, customer);
         return;
       }
 
@@ -1176,7 +1236,7 @@ async function startBot() {
       }
 
       console.log(`Mensagem recebida em ${jid}: ${text || '[sem texto]'}${action ? ` (${action.field}:${action.value})` : ''}`);
-      await handleCustomerMessage(sock, jid, text, action);
+      await handleCustomerMessage(sock, jid, text, action, customer);
     } catch (error) {
       console.error(error);
       const jid = msg?.key?.remoteJid;
@@ -1204,6 +1264,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildCustomerContact,
   calculateSimulation,
   extractMessageTextAndAction,
   parseCurrencyInput,

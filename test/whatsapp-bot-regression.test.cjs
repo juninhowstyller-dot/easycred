@@ -1,6 +1,7 @@
 const assert = require('assert/strict');
 
 const {
+  buildCustomerContact,
   extractMessageTextAndAction,
   parseCurrencyInput,
   parseMessage,
@@ -97,6 +98,30 @@ assert.equal(renderedResult.includes('Cartao:'), false);
 assert.equal(renderedResult.includes('Parcelamento:'), false);
 
 async function runAsyncChecks() {
+  const contact = await buildCustomerContact({
+    signalRepository: {
+      lidMapping: {
+        getPNForLID(jid) {
+          assert.equal(jid, '123456789@lid');
+          return Promise.resolve('5527999998888:0@s.whatsapp.net');
+        },
+      },
+    },
+  }, '123456789@lid', {
+    messageKey: { remoteJid: '123456789@lid' },
+    pushName: 'Cliente Teste',
+  });
+
+  assert.equal(contact.display, 'Cliente Teste - +5527999998888');
+  assert.equal(contact.link, 'https://wa.me/5527999998888');
+
+  const unresolvedContact = await buildCustomerContact({}, '12345678912345@lid', {
+    messageKey: { remoteJid: '12345678912345@lid' },
+  });
+
+  assert.equal(unresolvedContact.display.includes('@lid'), false);
+  assert.equal(unresolvedContact.display.includes('12345678912345'), false);
+
   const relayed = [];
   await sendButtonMessage({
     user: { id: 'bot@s.whatsapp.net' },

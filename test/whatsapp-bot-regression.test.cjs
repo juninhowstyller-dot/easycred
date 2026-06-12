@@ -30,6 +30,24 @@ assert.deepEqual(parseMessage('simular 1000 em 10x limite'), {
   type: 'limit',
 });
 
+assert.deepEqual(parseMessage('18x'), {
+  amount: undefined,
+  installments: 18,
+  type: undefined,
+});
+
+assert.deepEqual(parseMessage('1000 18x'), {
+  amount: 1000,
+  installments: 18,
+  type: 'unleashed',
+});
+
+assert.deepEqual(parseMessage('tenho 3 mil de limite em 18x quanto recebo?'), {
+  amount: 3000,
+  installments: 18,
+  type: 'limit',
+});
+
 assert.deepEqual(parseMessage('quero receber 2000 em 12 vezes'), {
   amount: 2000,
   installments: 12,

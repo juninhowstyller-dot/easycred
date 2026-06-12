@@ -291,6 +291,12 @@ function parseCurrencyInput(value) {
   return Number(text) || 0;
 }
 
+function stripInstallmentFragments(text) {
+  return String(text || '')
+    .replace(/\b\d{1,2}\s*(?:x|vezes|parcelas?|prestacoes?)\b/gi, ' ')
+    .replace(/\bem\s+\d{1,2}\b/gi, ' ');
+}
+
 function parseAmountFromText(rawText) {
   const text = String(rawText || '');
   const normalized = normalizeText(text);
@@ -299,7 +305,11 @@ function parseAmountFromText(rawText) {
     return roundCurrency(parseCurrencyInput(thousandMatch[1]) * 1000);
   }
 
-  const currencyMatch = text.match(/(?:r\$\s*)?(\d[\d.,]*)/i);
+  const explicitCurrencyMatch = text.match(/r\$\s*(\d[\d.,]*)/i);
+  if (explicitCurrencyMatch) return parseCurrencyInput(explicitCurrencyMatch[1]);
+
+  const textWithoutInstallments = stripInstallmentFragments(text);
+  const currencyMatch = textWithoutInstallments.match(/(\d[\d.,]*)/i);
   return currencyMatch ? parseCurrencyInput(currencyMatch[1]) : 0;
 }
 
